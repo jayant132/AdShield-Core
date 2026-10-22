@@ -1,0 +1,6 @@
+.PHONY: test race eval run export
+test:   ; go test ./...
+race:   ; go test -race -count=1 ./...
+eval:   ; go run ./cmd/evaluate
+export: ; go run ./cmd/evaluate -export events.csv
+run:    ; go run ./cmd/server
