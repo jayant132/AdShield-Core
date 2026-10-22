@@ -29,7 +29,12 @@ import (
 	"github.com/jayant132/adshield-core/internal/telemetry"
 )
 
+type publisher interface {
+	Publish(ctx context.Context, e events.Event) error
+}
+
 type server struct {
+	pub  publisher // in-memory broker by default, Kafka with -tags infra
 	b    *queue.Broker
 	proc *pipeline.Processor
 	st   *store.Store
@@ -46,7 +51,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	b.Consume(ctx, proc.Handle)
+	var pub publisher = b
+	if p, ok := initInfra(ctx, proc, m); ok { // Kafka / DynamoDB Local via -tags infra
+		pub = p
+	} else {
+		b.Consume(ctx, proc.Handle)
+	}
 	go func() { // sample queue depth gauges
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -61,7 +71,7 @@ func main() {
 		}
 	}()
 
-	s := &server{b: b, proc: proc, st: st, m: m}
+	s := &server{pub: pub, b: b, proc: proc, st: st, m: m}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events", s.ingest)
 	mux.HandleFunc("GET /v1/devices/{id}/risk", s.risk)
@@ -99,7 +109,7 @@ func (s *server) ingest(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
-	if err := s.b.Publish(ctx, e); err != nil { // queue full => shed load
+	if err := s.pub.Publish(ctx, e); err != nil { // queue full => shed load
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "queue full, retry later"})
 		return
 	}

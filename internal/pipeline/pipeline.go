@@ -16,7 +16,16 @@ import (
 
 var ErrTransient = errors.New("transient downstream failure")
 
+// Idempotency is a conditional-write claim on an event_id. The in-memory Store
+// implements it; so does the DynamoDB implementation (attribute_not_exists).
+// Claim returns false when the event was already claimed (a duplicate).
+type Idempotency interface {
+	Claim(ctx context.Context, id string) (bool, error)
+	Release(ctx context.Context, id string) error
+}
+
 type Processor struct {
+	Idem   Idempotency // defaults to Store
 	Store  *store.Store
 	Engine *detect.Engine
 	M      *telemetry.Metrics
@@ -32,16 +41,21 @@ type Processor struct {
 }
 
 func New(s *store.Store, eng *detect.Engine, m *telemetry.Metrics) *Processor {
-	return &Processor{Store: s, Engine: eng, M: m, attempts: map[string]int{}, seen: map[string]struct{}{}}
+	return &Processor{Idem: s, Store: s, Engine: eng, M: m, attempts: map[string]int{}, seen: map[string]struct{}{}}
 }
 
 // Handle is safe to call any number of times for the same event: the payout
 // and history are applied exactly once.
-func (p *Processor) Handle(_ context.Context, e events.Event) error {
+func (p *Processor) Handle(ctx context.Context, e events.Event) error {
 	start := time.Now()
 	defer func() { p.M.ProcessSecs.Observe(time.Since(start).Seconds()) }()
 
-	if !p.Store.MarkProcessed(e.EventID) {
+	claimed, err := p.Idem.Claim(ctx, e.EventID)
+	if err != nil {
+		p.M.Outcomes.Inc("failed_attempt")
+		return err // idempotency store unavailable: retry, never guess
+	}
+	if !claimed {
 		p.M.Outcomes.Inc("duplicate")
 		return nil
 	}
@@ -55,7 +69,7 @@ func (p *Processor) Handle(_ context.Context, e events.Event) error {
 		if err := p.FailHook(e, n); err != nil {
 			// Release the idempotency key, otherwise the retry would be
 			// ignored as a "duplicate" and the event silently lost.
-			p.Store.Unmark(e.EventID)
+			_ = p.Idem.Release(ctx, e.EventID)
 			p.M.Outcomes.Inc("failed_attempt")
 			return err
 		}

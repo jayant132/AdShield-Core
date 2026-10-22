@@ -153,6 +153,7 @@ type Metrics struct {
 	Alerts      *CounterVec // by rule
 	QueueDepth  *Gauge
 	DLQDepth    *Gauge
+	ConsumerLag *Gauge // Kafka consumer-group lag (messages behind the log end)
 	ProcessSecs *Histogram
 }
 
@@ -165,6 +166,7 @@ func NewMetrics() *Metrics {
 		Alerts:      r.Counter("adshield_fraud_alerts_total", "Fraud alerts by rule.", "rule"),
 		QueueDepth:  r.Gauge("adshield_queue_depth", "Messages waiting in the event queue."),
 		DLQDepth:    r.Gauge("adshield_dlq_depth", "Messages in the dead-letter queue."),
+		ConsumerLag: r.Gauge("adshield_consumer_lag", "Kafka consumer lag in messages (sum over partitions)."),
 		ProcessSecs: r.Histogram("adshield_process_seconds", "Per-event processing latency.", []float64{.0001, .0005, .001, .005, .01, .05, .1, .5, 1}),
 	}
 }

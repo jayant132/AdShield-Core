@@ -5,6 +5,7 @@
 package store
 
 import (
+	"context"
 	"sort"
 	"sync"
 
@@ -94,3 +95,8 @@ func (s *Store) ProcessedCount() int {
 	defer s.mu.RUnlock()
 	return len(s.processed)
 }
+
+// Claim and Release let *Store satisfy pipeline.Idempotency (the same
+// interface the DynamoDB-backed implementation provides).
+func (s *Store) Claim(_ context.Context, id string) (bool, error) { return s.MarkProcessed(id), nil }
+func (s *Store) Release(_ context.Context, id string) error       { s.Unmark(id); return nil }
